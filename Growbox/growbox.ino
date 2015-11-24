@@ -1,11 +1,11 @@
-#include <OneWire.h>
-#include <dht.h>
+#include <DHT.h>
 #include <Wire.h> 
 #include <LiquidCrystal_I2C.h>
+#include <Servo.h>
 
 // ---- Define wanted values for the growbox
 int HumMin = 40;
-int HumMax = 70;
+int HumMax = 60;
 int TempMin = 20;
 int TempMax = 30;
 
@@ -14,12 +14,13 @@ int BackLightDelay = 5; //delay in s
 int CheckValueDelay = 10; //delay in s before checking for temperature and humidity in the growbox
 
 // ---- Define pins
+int ServoPin = 8; // Servo motor
 int SwitchPin = 2; // Interrupt
 int HotPin = 5; // Led rouge
 int FanPin = 6; // Led jaune
 int LightPin = 7; // Led verte
 int DHTPin = A0;
-int DS18S20_Pin = 8;
+
 
 // ---- Setup global variables
 volatile int IntState = LOW;
@@ -31,11 +32,16 @@ unsigned long CurrentTime = 0;
 int chk = 0;
 int ReadHum = 0;
 int ReadTemp = 0;
+int angle = 0;   // servo position in degrees 
 
-// ---- Setup sensors
-OneWire ds(DS18S20_Pin); //Temperature chip i/o on digital pin 7 by rahulmitra
-#define dht_dpin DHTPin //no ; here. Set equal to channel sensor is on 
-dht DHT;
+// --- Setup servo
+Servo servo;
+
+
+// ---- Setup DHT sensor
+#define DHTPIN DHTPin
+#define DHTTYPE DHT22
+DHT dht(DHTPIN, DHTTYPE);
 
 // ---- Setup LCD screen
 LiquidCrystal_I2C lcd(0x27,16,2);  // set the LCD address to 0x20 for a 16 chars and 2 line display
@@ -137,10 +143,18 @@ void setup() {
   pinMode(SwitchPin, INPUT); // Input for backlight switch
   digitalWrite(SwitchPin, HIGH); // Switch input Up
 
-  //Define interrupts
+  // --- Define interrupts
   attachInterrupt(digitalPinToInterrupt(SwitchPin), BLInt, FALLING); //setup interrupt for backlight switch
+
+  // --- initiate DHT sensor
+  dht.begin();
+
+  // --- initiate servo motor
+  servo.attach(ServoPin);
+  servo.write(0);
   
-  //Delay for LCD and DHT sensor
+  
+  // --- Delay for LCD and DHT sensor
   delay(800);
 }
 
@@ -166,16 +180,15 @@ void loop() {
   // --- Thermometer timer
   unsigned long TimeLapse2 = CurrentTime - LastChange2;
 
-  if (TimeLapse2 > 800){
+  if (TimeLapse2 > 2000){
     // ---- Read all values
         
     //Read air temp from DS18B20 sensor
     //ReadTemp = getTemp();
     
-    //Read DHT11 sensor values
-    chk = DHT.read11(DHTPin);
-    ReadHum = DHT.humidity;
-    ReadTemp = DHT.temperature;  
+    //Read DHT sensor values
+    ReadHum = dht.readHumidity();
+    ReadTemp = dht.readTemperature();
   
     //Send data to serial port
     Serial.print("t= ");
@@ -204,36 +217,30 @@ void loop() {
     {
      digitalWrite(HotPin,LOW);   // heater off
      digitalWrite(FanPin,HIGH);  // fan On
+     servo.write(180);  // open flaps
     }
     else{
      //digitalWrite(HotPin,LOW);   // heater Off
      digitalWrite(FanPin,LOW);  // fan Off
+     servo.write(0);  // close flaps
     };
     
     if (ReadTemp <=  TempMin || ReadHum <=  HumMin)
     {
      digitalWrite(HotPin,HIGH);   // heater on
      digitalWrite(FanPin,LOW);  // fan Off
+     servo.write(0);  // close flaps
     }
     else{
      digitalWrite(HotPin,LOW);   // heater Off
-     //digitalWrite(FanPin,LOW);  // fan Off
     };
     
-    //Send data to serial port
-    //Serial.print("t= ");
-    //Serial.println((float)DHT.temperature);
-    //Serial.print("h= ");
-    //Serial.println((float)DHT.humidity);         
-      
-    //delay(10000); //just here to slow down the output so it is easier to read
     LastChange3 = CurrentTime;
   }
   
   // --- Display data on LCD screen
   lcd.setCursor(0, 0);
     lcd.print("Temp.: ");
-    //lcd.print((float)getTemp(), 0);
     lcd.print(ReadTemp);
     lcd.print(char(1));
     lcd.print("C");
@@ -242,52 +249,9 @@ void loop() {
     lcd.print(ReadHum);
     lcd.print("%");
   }
-  
+
+// --- Funtion for switch interrupt  
 void BLInt() {
     IntState = HIGH;  
 }
 
-// --- Function to read temp fron DS18B20 sensor
-float getTemp(){
-//returns the temperature from one DS18S20 in DEG Celsius
-byte data[12];
-byte addr[8];
-
-if ( !ds.search(addr)) {
-//no more sensors on chain, reset search
-ds.reset_search();
-return -1000;
-}
-
-if ( OneWire::crc8( addr, 7) != addr[7]) {
-Serial.println("CRC is not valid!");
-return -1000;
-}
-
-if ( addr[0] != 0x10 && addr[0] != 0x28) {
-Serial.print("Device is not recognized");
-return -1000;
-}
-
-ds.reset();
-ds.select(addr);
-ds.write(0x44,1); // start conversion, with parasite power on at the end
-
-byte present = ds.reset();
-ds.select(addr);
-ds.write(0xBE); // Read Scratchpad
-
-for (int i = 0; i < 9; i++) { // we need 9 bytes
-data[i] = ds.read();
-}
-
-ds.reset_search();
-
-byte MSB = data[1];
-byte LSB = data[0];
-
-float tempRead = ((MSB << 8) | LSB); //using two's compliment
-float TemperatureSum = tempRead / 16;
-
-return TemperatureSum;
-} 
